@@ -42,7 +42,7 @@ print(journal['similar_journals'])      # 同类著名期刊
 
 ## 功能 2：分析期刊评论
 
-**流程**：期刊名称 → （复用功能1拿到的 `journal_id`，否则重新搜索）→ 遍历至少 5 页评论 → 综合分析。
+**流程**：期刊名称 → （复用功能1拿到的 `journal_id`，否则重新搜索）→ 遍历至少 3 页评论（每页约 10 楼，可根据实际评论数量动态增减）→ 综合分析。
 
 ```python
 from letpub_skills.scripts.search_journal import search_journal
@@ -52,9 +52,9 @@ from letpub_skills.scripts.get_comments import get_journal_comments, parse_comme
 results = search_journal("CHEMICAL ENGINEERING SCIENCE")
 journal_id = results[0]['id']
 
-# 遍历至少5页评论
+# 遍历至少3页评论（每页约10楼，可根据实际需要增减页数）
 all_comments = []
-for page in range(1, 6):
+for page in range(1, 4):  # 默认3页起，按需扩展
     response = get_journal_comments(journal_id=journal_id, page=page)
     comments = parse_comments_response(response)
     if not comments:

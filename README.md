@@ -1,4 +1,4 @@
-<img width="769" height="790" alt="image" src="https://github.com/user-attachments/assets/88e026ac-fcb9-4896-ad48-6bd766582f14" /># LetPub Skills
+# LetPub Skills
 
 基于 LetPub 的期刊数据爬取工具包，为科研工作者提供期刊查询、评论分析和智能推荐能力。可作为 AI 助手的 Skill 接入，也可独立调用。
 

@@ -1,4 +1,4 @@
-# LetPub Skills
+<img width="769" height="790" alt="image" src="https://github.com/user-attachments/assets/88e026ac-fcb9-4896-ad48-6bd766582f14" /># LetPub Skills
 
 基于 LetPub 的期刊数据爬取工具包，为科研工作者提供期刊查询、评论分析和智能推荐能力。可作为 AI 助手的 Skill 接入，也可独立调用。
 
@@ -146,6 +146,9 @@ letpub-skills/
 ### 评论获取不全？
 
 LetPub 评论按分页返回，默认每页约 10 条。程序会自动翻页，直到无新评论为止。如果期刊评论较少，可能不足 5 页。
+## 社区
+
+有问题、建议，或想一起折腾？欢迎来 **[linux.do](https://linux.do)** 社区交流反馈。
 
 ## License
 

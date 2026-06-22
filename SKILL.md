@@ -18,17 +18,14 @@ LetPub 期刊数据爬取工具，提供三大核心能力：
 
 ```python
 from letpub_skills.scripts.search_journal import search_journal
-from letpub_skills.scripts.get_details import parse_journal_detail
-import requests
+from letpub_skills.scripts.get_details import get_journal_detail
 
 # 第1步：搜索拿到 journal_id
 results = search_journal("CHEMICAL ENGINEERING SCIENCE")
 journal_id = results[0]['id']  # 例如 "1642"
 
-# 第2步：请求详情页并解析
-url = f"https://letpub.com.cn/index.php?journalid={journal_id}&page=journalapp&view=detail"
-response = requests.get(url)
-journal = parse_journal_detail(response.text)
+# 第2步：一步到位获取详情（请求 + 解析）
+journal = get_journal_detail(journal_id)
 
 print(journal['impact_factor'])         # 影响因子
 print(journal['ch_sci_2025']['分区'])    # 中科院分区
@@ -42,35 +39,41 @@ print(journal['similar_journals'])      # 同类著名期刊
 
 ## 功能 2：分析期刊评论
 
-**流程**：期刊名称 → （复用功能1拿到的 `journal_id`，否则重新搜索）→ 遍历至少 3 页评论（每页约 10 楼，可根据实际评论数量动态增减）→ 综合分析。
+**流程**：期刊名称 → （复用功能1拿到的 `journal_id`，否则重新搜索）→ 自动翻页、去重，累积评论直至满足数量 → 综合分析。
 
 ```python
 from letpub_skills.scripts.search_journal import search_journal
-from letpub_skills.scripts.get_comments import get_journal_comments, parse_comments_response
+from letpub_skills.scripts.get_comments import fetch_all_comments
 
 # 如果已通过功能1拿到 journal_id，直接复用；否则：
 results = search_journal("CHEMICAL ENGINEERING SCIENCE")
 journal_id = results[0]['id']
 
-# 遍历至少3页评论（每页约10楼，可根据实际需要增减页数）
-all_comments = []
-for page in range(1, 4):  # 默认3页起，按需扩展
-    response = get_journal_comments(journal_id=journal_id, page=page)
-    comments = parse_comments_response(response)
-    if not comments:
-        break
-    all_comments.extend(comments)
+# 自动翻页、去重，至少获取 30 条评论（不足则继续翻页直至无新数据）
+all_comments = fetch_all_comments(journal_id, min_count=30)
 
 print(f"共获取 {len(all_comments)} 条评论")
 # 然后由 AI 对 all_comments 进行综合分析（审稿速度、录用难度、用户口碑、常见反馈等）
 ```
 
-### Cookies 配置（必需）
+### Cookies 配置（自动）
 
-获取评论需登录。在 `letpub_skills/assets/cookies.json` 填入浏览器 cookies：
+评论需要登录才能获取。**脚本已支持自动登录续期**：
+
+1. 在 `letpub_skills/assets/credentials.json` 填入账号密码：
 
 ```json
-{ "cookies": "PHPSESSID=xxx; ..." }
+{ "email": "your@email.com", "password": "your_password" }
+```
+
+2. 调用 `get_journal_comments()` 时，若 cookie 已失效，脚本会**自动读取 credentials.json 重新登录**并更新 `cookies.json`，对调用者完全透明。
+
+3. 如需手动触发登录：
+
+```python
+from letpub_skills.scripts.login import auto_login, load_credentials
+email, password = load_credentials()
+cookies = auto_login(email, password)  # 登录并保存到 cookies.json
 ```
 
 ### 评论字段（每条评论）
@@ -166,11 +169,11 @@ for j in result['journals']:
 >
 > - **评论数量** ≥ **10 条**（指顶层独立评论 / `floor` 计数 ≥ 10，**不包含** `replies` 中的层级回复；不足 10 条则继续翻页直至满足或无新数据）
 > - **综合评分** ≥ **7.0 / 10**（所有评论 `score` 的算术平均值）
-> - **「慢/拖/with editor」负面比例** < **30%**（在 `experience` 字段中命中关键词：`慢`、`拖`、`太慢`、`迟迟`、`WE`、`with editor`、`卡在编辑`、`压稿` 等的评论占比）
+> - **「慢/拖/压稿」负面比例** < **30%**（在 `experience` 字段中命中关键词：`慢`、`拖`、`太慢`、`迟迟`、`卡在编辑`、`压稿`、`一直with editor`、`WE很久`、`WE太慢` 等的评论占比；注意：单独出现 `WE` 或 `with editor` 是正常流程，不算负面）
 > - **无学术诚信负评**（任一评论命中以下关键词即整体淘汰，**一票否决**）：`学术道德`、`学术不端`、`抄袭`、`剽窃`、`政治原因`、`分赃`、`黑幕`、`要求引用`、`强制引用`
 >
 > **去重与 Cookie 失效检测**：
-> 翻页累积评论时必须基于 `floor`（或 `author + experience` 哈希）去重。若反复翻页拿到的都是同一批评论（即新页评论与已有集合完全重合，或多页返回内容完全一致），说明 cookie 很可能已失效，**立即停止抓取并提醒用户更新 `letpub_skills/assets/cookies.json` 中的 cookies**，不要在未通过审核的情况下推荐期刊。
+> `fetch_all_comments` 已内置基于 `floor` 的去重逻辑。若连续 2 页拿到的都是同一批评论（即新页评论与已有集合完全重合），说明 cookie 很可能已失效——此时 `get_journal_comments` 会**自动触发重新登录**（读取 `credentials.json` 并更新 `cookies.json`），然后重试。若续期后仍无新数据，函数会自动停止翻页，不会无限循环。
 >
 > 在最终输出中，对每个推荐期刊附上审核结果摘要：评论条数、平均分、慢审比例、是否存在诚信负评。
 
@@ -184,11 +187,13 @@ for j in result['journals']:
 letpub_skills/
 ├── SKILL.md                    # 操作手册（本文件）
 ├── assets/
-│   └── cookies.json            # LetPub 登录 cookies（用户填写）
+│   ├── credentials.json        # 账号密码（用户填写）
+│   └── cookies.json            # 登录 cookies（自动生成，无需手动修改）
 ├── scripts/
+│   ├── login.py                # 自动登录与 cookie 续期
 │   ├── search_journal.py       # 期刊搜索（自动补全 + 高级搜索）
 │   ├── get_details.py          # 期刊详情解析
-│   └── get_comments.py         # 评论获取与解析
+│   └── get_comments.py         # 评论获取与解析（自动续期登录）
 └── references/
     ├── search_journal.md       # 搜索参数与学科分类完整数据
     ├── get_journal_detail.md   # 详情字段说明
@@ -199,10 +204,15 @@ letpub_skills/
 
 | 模块 | 函数 | 说明 |
 |------|------|------|
+| `login` | `load_credentials()` | 从 credentials.json 读取账号密码 |
+| `login` | `auto_login(email, password)` | 登录并保存 cookies |
+| `login` | `ensure_logged_in()` | 检查 cookie 有效性，失效时自动续期 |
 | `search_journal` | `search_journal(name)` | 自动补全搜索，返回 `journal_id` |
 | `search_journal` | `search_journals_advanced(**params)` | 高级多条件搜索 |
 | `search_journal` | `parse_search_results(html)` | 解析搜索结果 |
 | `search_journal` | `CATEGORY_CN`, `SUBCATEGORY_CN` | 学科分类数据 |
+| `get_details` | `get_journal_detail(journal_id)` | 一步获取并解析期刊详情 |
 | `get_details` | `parse_journal_detail(html)` | 解析期刊详情页 |
-| `get_comments` | `get_journal_comments(journal_id, page)` | 获取评论原始响应 |
+| `get_comments` | `fetch_all_comments(journal_id, min_count)` | 自动翻页去重抓取评论 |
+| `get_comments` | `get_journal_comments(journal_id, page)` | 获取单页评论原始响应（自动续期） |
 | `get_comments` | `parse_comments_response(data)` | 解析评论列表 |

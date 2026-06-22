@@ -1,5 +1,27 @@
 import re
+import requests
 from bs4 import BeautifulSoup
+
+
+def get_journal_detail(journal_id: int) -> dict:
+    """
+    一步到位获取并解析期刊详情
+
+    Args:
+        journal_id: 期刊 ID
+
+    Returns:
+        解析后的期刊信息字典
+    """
+    url = f"https://letpub.com.cn/index.php?journalid={journal_id}&page=journalapp&view=detail"
+    headers = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36 Edg/149.0.0.0"
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return parse_journal_detail(response.text)
 
 
 def parse_journal_detail(html_content: str):

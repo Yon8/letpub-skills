@@ -3,6 +3,7 @@ import json
 import re
 import os
 from bs4 import BeautifulSoup
+from .login import ensure_logged_in
 
 
 def load_cookies():
@@ -20,7 +21,42 @@ def load_cookies():
     return None
 
 
-def get_journal_comments(journal_id: int, page: int = 1, sorttype: str = "undefined", cookies: str = None):
+def _is_login_expired(response: requests.Response) -> bool:
+    """
+    检测响应是否为 cookie 失效 / 未登录状态
+
+    判断依据：
+    1. 响应不是合法 JSON（服务器返回 HTML 登录重定向）
+    2. JSON 中 msg/data 含登录相关关键词
+    3. 期刊总评论数 > 1，但只返回了 1 条数据（cookie 过期后接口只给一楼）
+    """
+    # 不是 JSON → 大概率是登录页重定向
+    try:
+        data = response.json()
+    except ValueError:
+        return True
+
+    # JSON 里含有明显的未登录标志
+    msg = str(data.get('msg', '') or data.get('message', '')).lower()
+    if any(kw in msg for kw in ['login', '登录', 'please log', 'unauthorized']):
+        return True
+
+    # 核心检测：cookie 过期后接口只返回 1 条评论，但总数 > 1
+    count = data.get('count', 0)
+    data_items = data.get('data', [])
+    if count > 1 and len(data_items) <= 1:
+        return True
+
+    return False
+
+
+def get_journal_comments(
+    journal_id: int,
+    page: int = 1,
+    sorttype: str = "undefined",
+    cookies: str = None,
+    _renewed: bool = False
+):
     """
     获取期刊评论
 
@@ -28,7 +64,8 @@ def get_journal_comments(journal_id: int, page: int = 1, sorttype: str = "undefi
         journal_id: 期刊 ID
         page: 页码，默认为 1
         sorttype: 排序类型，默认为 "undefined"
-        cookies: cookies 字符串，如果为 None 则从 assets/cookies.txt 读取
+        cookies: cookies 字符串，如果为 None 则从 assets/cookies.json 读取
+        _renewed: 内部标志，防止续期重试无限循环
 
     Returns:
         评论数据 JSON
@@ -63,6 +100,18 @@ def get_journal_comments(journal_id: int, page: int = 1, sorttype: str = "undefi
 
     response = requests.post(url, params=params, headers=headers)
     response.raise_for_status()
+
+    # 检测 cookie 是否失效，失效则强制续期并重试一次
+    if _is_login_expired(response) and not _renewed:
+        new_cookies = ensure_logged_in(force=True)  # 强制重新登录
+        return get_journal_comments(
+            journal_id=journal_id,
+            page=page,
+            sorttype=sorttype,
+            cookies=new_cookies,
+            _renewed=True
+        )
+
     return response.json()
 
 
@@ -211,12 +260,81 @@ def parse_comments_response(response_data: dict):
     return comments
 
 
+def fetch_all_comments(
+    journal_id: int,
+    min_count: int = 30,
+    max_pages: int = None
+) -> list:
+    """
+    一次性抓取期刊评论，自动翻页、去重，直至满足数量或无新数据
+
+    Args:
+        journal_id: 期刊 ID
+        min_count: 最少要获取的评论条数，达到后停止翻页
+        max_pages: 最多翻多少页，None 表示不限制（会一直翻到无新数据为止）
+
+    Returns:
+        解析后的评论列表（已按 floor 去重）
+    """
+    all_comments = []
+    seen_floors = set()
+    page = 1
+    consecutive_dup_pages = 0  # 连续重复页数计数，防止无限翻页
+
+    while True:
+        data = get_journal_comments(journal_id=journal_id, page=page)
+        comments = parse_comments_response(data)
+
+        # 当前页没有数据 → 停止
+        if not comments:
+            break
+
+        # 按 floor 去重后加入结果集
+        new_count = 0
+        for c in comments:
+            floor = c.get('floor', '')
+            if floor and floor not in seen_floors:
+                seen_floors.add(floor)
+                all_comments.append(c)
+                new_count += 1
+            elif not floor:
+                # 没有 floor 的评论用 author+experience 哈希去重
+                key = f"{c.get('author', '')}_{c.get('experience', '')}"
+                if key not in seen_floors:
+                    seen_floors.add(key)
+                    all_comments.append(c)
+                    new_count += 1
+
+        # 整页都是重复的 → cookie 可能失效（自动续期已处理过仍重复）
+        if new_count == 0:
+            consecutive_dup_pages += 1
+            if consecutive_dup_pages >= 2:
+                break  # 连续 2 页无新数据，停止
+        else:
+            consecutive_dup_pages = 0
+
+        # 达到目标数量
+        if len(all_comments) >= min_count:
+            break
+
+        # 达到页数上限
+        if max_pages and page >= max_pages:
+            break
+
+        # 已达到总页数
+        total_pages = data.get('pages', 0)
+        if page >= total_pages:
+            break
+
+        page += 1
+
+    return all_comments
+
+
 if __name__ == "__main__":
     # 示例：获取期刊评论
     journal_id = 1642
-    response_data = get_journal_comments(journal_id, page=1)
-    print(f"总记录数: {response_data.get('count', 0)}")
-    print(f"总页数: {response_data.get('pages', 0)}")
-    print(f"当前页数据条数: {len(response_data.get('data', []))}")
-    comments = parse_comments_response(response_data)
-    print(json.dumps(comments, indent=2, ensure_ascii=False))
+    comments = fetch_all_comments(journal_id, min_count=30)
+    print(f"共获取 {len(comments)} 条评论")
+    if comments:
+        print(json.dumps(comments[:3], indent=2, ensure_ascii=False))
